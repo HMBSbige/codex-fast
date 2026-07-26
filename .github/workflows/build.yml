@@ -1,0 +1,68 @@
+name: Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+          key: ${{ matrix.target }}
+
+      - name: Test
+        run: cargo test --locked --target ${{ matrix.target }}
+
+      - name: Build Windows release binary
+        if: runner.os == 'Windows'
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Build macOS application bundle
+        if: runner.os == 'macOS'
+        run: scripts/build-macos-app.sh
+
+      - name: Package Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive `
+            -LiteralPath "target\${{ matrix.target }}\release\codex-fast.exe" `
+            -DestinationPath "dist\codex-fast-windows-x86_64.zip"
+
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            "dist/Codex Fast.app" \
+            "dist/codex-fast-macos-aarch64.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/*.zip
+          if-no-files-found: error
+          archive: false
